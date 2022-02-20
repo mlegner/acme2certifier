@@ -12,10 +12,6 @@ jobs:
   acme_sh_apache2_wsgi:
     name: "acme_sh_apache2_wsgi"
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        keylength: [2048]
     steps:
     - name: "checkout GIT"
       uses: actions/checkout@v2
@@ -34,6 +30,9 @@ jobs:
     - name: "[ PREPARE ] setup openssl ca_handler"
       run: |
         sudo cp examples/ca_handler/openssl_ca_handler.py examples/Docker/data/ca_handler.py
+        sudo chmod 777 examples/Docker/data/ca_handler.py
+        sudo sed -i "s/import uuid/import uuid\\nimport time/g" examples/Docker/data/ca_handler.py
+        sudo sed -i "s/        cert_raw = None/        cert_raw = None\\n        time.sleep(45)/g" examples/Docker/data/ca_handler.py
         sudo mkdir -p examples/Docker/data/acme_ca/certs
         sudo cp test/ca/sub-ca-key.pem test/ca/sub-ca-crl.pem test/ca/sub-ca-cert.pem test/ca/root-ca-cert.pem examples/Docker/data/acme_ca/
         sudo cp .github/openssl_ca_handler.py_acme_srv_default_handler.cfg examples/Docker/data/acme_srv.cfg
@@ -49,6 +48,33 @@ jobs:
       run: |
         docker exec -i acme-sh acme.sh --server http://acme-srv --accountemail 'acme-sh@example.com' --issue -d acme-sh.acme --standalone --debug 3 --output-insecure
         openssl verify -CAfile examples/Docker/data/acme_ca/root-ca-cert.pem -untrusted examples/Docker/data/acme_ca/sub-ca-cert.pem acme-sh/acme-sh.acme${ECC}/acme-sh.acme.cer
+
+    - name: "[ VERIFY ] Check timeout"
+      working-directory: examples/Docker/
+      run: |
+        docker-compose logs | grep "Certificate.enroll_and_store() ended with: None:timeout"
+        sudo truncate -s 0 $(docker inspect --format='{{.LogPath}}' acme2certifier_acme-srv_1)
+
+    #- name: "[ ENROLL] certbot"
+    #  run: |
+    #    docker run -i --rm --name certbot --network acme -v $PWD/certbot:/etc/letsencrypt/ certbot/certbot register --agree-tos -m 'certbot@example.com' --server http://acme-srv --no-eff-email
+
+    #- name: "[ VERIFY ] Check timeout"
+    #  working-directory: examples/Docker/
+    #  run: |
+    #    docker-compose logs | grep "Certificate.enroll_and_store() ended with: None:timeout"
+    #    sudo truncate -s 0 $(docker inspect --format='{{.LogPath}}' acme2certifier_acme-srv_1)
+
+    - name: "[ ENROLL ] lego"
+      run: |
+        mkdir lego
+        docker run -i -v $PWD/lego:/.lego/ --rm --name lego --network acme goacme/lego -s http://acme-srv -a --email "lego@example.com" -d lego.acme  --cert.timeout 120 --http run
+        sudo openssl verify -CAfile examples/Docker/data/acme_ca/root-ca-cert.pem -untrusted examples/Docker/data/acme_ca/sub-ca-cert.pem lego/certificates/lego.acme.crt
+
+    - name: "[ VERIFY ] Check timeout"
+      working-directory: examples/Docker/
+      run: |
+        docker-compose logs | grep "Certificate.enroll_and_store() ended with: None:timeout"
 
     - name: "[ * ] collecting test data"
       if: ${{ failure() }}
